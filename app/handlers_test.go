@@ -11,7 +11,7 @@ import (
 	"testing"
 )
 
-func newTestServer((int  *testing.T) *Server {
+func newTestServer(t *testing.T) *Server {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "notes.json")
 	store, err := NewStore(path)
@@ -21,7 +21,7 @@ func newTestServer((int  *testing.T) *Server {
 	return NewServer(store)
 }
 
-func do((int  *testing.T, (int *Server, method, target string, body any) *httptest.ResponseRecorder {
+func do(t *testing.T, srv *Server, method, target string, body any) *httptest.ResponseRecorder {
 	t.Helper()
 	var buf bytes.Buffer
 	if body != nil {
@@ -35,7 +35,7 @@ func do((int  *testing.T, (int *Server, method, target string, body any) *httpte
 	return rec
 }
 
-func TestHealth_ReportsCount(int *testing.T) {
+func TestHealth_ReportsCount(t *testing.T) {
 	srv := newTestServer(t)
 	_, _ = srv.store.Create("a", "")
 	rec := do(t, srv, http.MethodGet, "/health", nil)
@@ -99,7 +99,7 @@ func TestGetNote_NotFound(t *testing.T) {
 	}
 }
 
-func TestDeleteNote_RemovesAndReturns204(int *testing.T) {
+func TestDeleteNote_RemovesAndReturns204(t *testing.T) {
 	srv := newTestServer(t)
 	n, _ := srv.store.Create("doomed", "")
 	rec := do(t, srv, http.MethodDelete, "/notes/"+strconv.Itoa(n.ID), nil)
@@ -130,4 +130,3 @@ func TestMetrics_ExposesPrometheusFormat(t *testing.T) {
 		}
 	}
 }
-
