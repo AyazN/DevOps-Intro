@@ -42,7 +42,7 @@ monitoring/
         └── golden-signals.json
 ```
 
-The provider YAML (`dashboard.yml`) lives under `provisioning/dashboards/`; the dashboard JSON (`golden-signals.json`) lives under `grafana/dashboards/`. This split is standard Grafana practice — the provider tells Grafana where to look, and the JSON is the artifact it loads.
+**Deviation from spec layout:** the spec diagram places `golden-signals.json` under `grafana/provisioning/dashboards/`. This report places it under `grafana/dashboards/` and uses `provisioning/dashboards/dashboard.yml` purely as the file provider. The split is the standard Grafana layout: the provider YAML tells Grafana where to look, and the JSON is the artifact it loads. Keeping the two separate avoids the provider attempting to parse its own config as a dashboard. The provider's `path:` field points at `/var/lib/grafana/dashboards`, which is exactly where the JSON is mounted in Compose (see 1.5).
 
 ### 1.2 monitoring/prometheus/prometheus.yml
 
@@ -175,7 +175,13 @@ volumes:
   grafana-data:
 ```
 
-Both images are pinned (no `:latest`). `prometheus` waits for `quicknotes` to be healthy via the Lab 6 healthcheck. `grafana` waits for `prometheus`. Grafana admin credentials are set via `GF_SECURITY_ADMIN_*` env vars.
+**Deviations from spec, 1.4:**
+
+1. **Grafana version.** Spec asks for `grafana/grafana:13.x.y`. Grafana has no 13.x release — the current stable major at the time of writing is 11.x. Pinned to `11.4.0`, a real, current version. Pinning to a non-existent version would break `docker compose up`.
+
+2. **Grafana host port.** Spec asks to publish host port 3000. Windows reserves TCP range 2931–3030 on this machine (see Environment Notes), so `3000:3000` fails with `bind: An attempt was made to access a socket in a way forbidden by its access permissions`. Host port `8081` is used; the container still listens on 3000 internally. Provisioning, datasource URLs, and dashboard paths are unaffected.
+
+Both Prometheus and Grafana images are pinned (no `:latest`). `prometheus` waits for `quicknotes` to be healthy via the Lab 6 healthcheck. `grafana` waits for `prometheus`. Grafana admin credentials are set via `GF_SECURITY_ADMIN_*` env vars; the placeholder password will be moved to `.env` before any real deployment.
 
 ### 1.6 Dashboard — four golden-signal panels
 
@@ -189,11 +195,13 @@ logger=provisioning.dashboard msg="finished to provision dashboards"
 | Panel | Query | Unit |
 |---|---|---|
 | Latency (proxy) | `sum(rate(quicknotes_http_requests_total[5m]))` | reqps |
-| Traffic (by response code) | `sum by (code) (rate(quicknotes_http_responses_by_code_total[5m]))` | reqps |
+| Traffic (total requests) | `sum(rate(quicknotes_http_responses_by_code_total[5m]))` | reqps |
 | Errors | `sum(rate(quicknotes_http_responses_by_code_total{code=~"4..\|5.."}[5m])) / sum(rate(quicknotes_http_responses_by_code_total[5m]))` | percentunit |
 | Saturation | `quicknotes_notes_total` | short |
 
 **Latency panel note:** QuickNotes does not expose a request-duration histogram or summary (`curl http://localhost:8080/metrics` shows no `duration` metric). Per the lab spec's explicit allowance, the Latency panel uses `sum(rate(quicknotes_http_requests_total[5m]))` as the proxy signal.
+
+**Traffic panel note:** the spec asks for the scalar `rate()` of total requests. The dashboard uses `sum(rate(quicknotes_http_responses_by_code_total[5m]))`, which sums all per-code rates into a single scalar total — equivalent to `rate(quicknotes_http_requests_total[5m])` but derived from the same source as the Errors panel for consistency.
 
 ### 1.7 Verification
 
@@ -214,7 +222,11 @@ quicknotes-prometheus   prom/prometheus:v3.1.0   Up                       0.0.0.
 
 Grafana reachable: `Grafana HTTP 200` at `http://localhost:8081/login`.
 
-Dashboard auto-load: `http://localhost:8081` → Dashboards → **Golden Signals** renders with all four panels without any manual import.
+**Substitution for the spec's `http://localhost:3000` check:** the spec asks to verify the dashboard at `http://localhost:3000`. That check cannot run on this machine because host port 3000 is reserved by Windows (see Environment Notes). The equivalent check was run at `http://localhost:8081` — Grafana → Dashboards → **Golden Signals** — and the dashboard renders with all four panels without any manual import.
+
+![Golden Signals dashboard with traffic](screenshots/dashboard.png)
+
+The screenshot above was captured with the dashboard time range set to **Last 15 minutes** while a local traffic loop was running against `GET /notes` and `GET /notes/1`. Non-zero activity is visible in the Latency (proxy), Traffic, and Saturation panels; Errors is flat at 0% because healthy traffic produces no 4xx/5xx.
 
 ### 1.8 Design questions
 
@@ -278,7 +290,7 @@ The screenshot above shows the rule definition (query, condition, `for: 5m`, lab
 
 ### 2.3 Runbook
 
-The full runbook lives at `docs/runbook/high-error-rate.md`. Its contents are reproduced below.
+The full runbook lives at `docs/runbook/high-error-rate.md`. Its contents are reproduced below. (The template it references, `docs/postmortem-template.md`, is itself derived from Lecture 1, Slide 20 — Blameless Postmortems.)
 
 # Runbook: QuickNotes High Error Rate
 
@@ -340,7 +352,7 @@ More than 5% of QuickNotes HTTP responses have been 4xx or 5xx for at least 5 co
 
 ## Post-incident
 
-Once the alert clears, write a blameless postmortem using the Lecture 1 template at `docs/postmortem-template.md`. Cover:
+Once the alert clears, write a blameless postmortem using the template at `docs/postmortem-template.md` (derived from Lecture 1, Slide 20 — Blameless Postmortems). Cover:
 
 - **Timeline:** when the alert fired, when it cleared, elapsed time
 - **User impact:** what fraction of users were affected, for how long
@@ -419,6 +431,7 @@ monitoring/grafana/provisioning/datasources/datasource.yml
 monitoring/grafana/provisioning/dashboards/dashboard.yml
 monitoring/grafana/dashboards/golden-signals.json
 docs/runbook/high-error-rate.md
+docs/postmortem-template.md
 submissions/lab8.md
 compose.yaml (extended with prometheus + grafana services)
 submissions/screenshots/dashboard.png
