@@ -1,0 +1,19 @@
+[Unit]
+Description=QuickNotes service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User={{ qn_user }}
+Group={{ qn_group }}
+WorkingDirectory={{ qn_data_dir }}
+Environment=ADDR={{ qn_listen_addr }}
+Environment=DATA_PATH={{ qn_data_path }}
+Environment=SEED_PATH={{ qn_seed_path }}
+ExecStart={{ qn_bin_path }}
+Restart=on-failure
+RestartSec={{ qn_restart_backoff }}
+
+[Install]
+WantedBy=multi-user.target
