@@ -14,7 +14,6 @@ import (
 )
 
 func main() {
-	demoReach() // TEMP: red-CI demo for govulncheck
 	if len(os.Args) > 1 && os.Args[1] == "-health" {
 		resp, err := http.Get("http://127.0.0.1:8080/health")
 		if err != nil || resp.StatusCode != http.StatusOK {
