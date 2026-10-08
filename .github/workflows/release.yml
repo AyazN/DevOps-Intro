@@ -41,3 +41,7 @@ jobs:
           tags: |
             ${{ steps.img.outputs.name }}:${{ github.ref_name }}
             ${{ steps.img.outputs.name }}:latest
+      
+      - name: Trigger Render deploy
+        run: |
+          curl -fsS "${{ secrets.RENDER_DEPLOY_HOOK }}&imgURL=ghcr.io%2Fayazn%2Fdevops-intro%2Fquicknotes%3A${{ github.ref_name }}"
