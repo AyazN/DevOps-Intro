@@ -1,8 +1,7 @@
-```markdown
 # Lab 9 — DevSecOps: Scan QuickNotes with Trivy + ZAP
 
 **Branch:** `feature/lab9`
-**Scope of this submission:** Task 1 (Trivy: image, filesystem, config, SBOM) and Task 2 (ZAP baseline + code fix). Bonus task (govulncheck CI gate) is documented separately / not attempted in this submission.
+**Scope of this submission:** Task 1 (Trivy: image, filesystem, config, SBOM), Task 2 (ZAP baseline + code fix), and the Bonus task (govulncheck as a CI PR gate).
 
 **Artifacts referenced below live in `artifacts/lab9/` and `screenshots/` in this repo.**
 
@@ -57,6 +56,8 @@ No HIGH or CRITICAL findings remain.
 | CVE-2026-25679 … (19 stdlib CVEs, see `trivy-image.json` pre-fix) | HIGH × 19 | `stdlib` (Go) | `v1.24.13` | 1.25.8 / 1.26.1 etc. | **FIX** | Builder image bumped from `golang:1.24-alpine` to `golang:1.25-alpine` in `app/Dockerfile`; re-scan shows 0 HIGH/CRITICAL. |
 
 **Post-fix scan: 0 HIGH, 0 CRITICAL.** No outstanding HIGH/CRITICAL findings to triage.
+
+All 19 findings share the same package (stdlib), installed version (v1.24.13), and root cause (outdated Go toolchain in the builder image). They are documented as a single grouped disposition because the fix (builder upgrade) resolves all of them in one change. Individual CVE IDs are in artifacts/lab9/trivy-image.json if needed.
 
 ### 1.4 Filesystem scan
 
@@ -171,7 +172,7 @@ The discipline is the same as any risk acceptance: named owner, reason, compensa
 
 An SBOM is a machine-readable, versioned inventory of every component in an artifact, with their versions and (often) PURLs. The concrete future problems it solves:
 
-- **Zero-day response time.** Log4Shell is the canonical case: within hours of the disclosure, every organisation in the world was asking "do we have Log4j, and where?" SBOM-less orgs spent days doing forensics. Organs with an SBOM could query it in seconds: *which of my images contain `log4j-core < 2.15.0`?* That's the whole point of the SBOM — turning a multi-day audit into a query.
+- **Zero-day response time.** Log4Shell is the canonical case: within hours of the disclosure, every organisation in the world was asking "do we have Log4j, and where?" SBOM-less orgs spent days doing forensics. Orgs with an SBOM could query it in seconds: *which of my images contain `log4j-core < 2.15.0`?* That's the whole point of the SBOM — turning a multi-day audit into a query.
 - **Provenance and supply-chain integrity.** When a maintainer's account is compromised (event-stream, `node-ipc`, `colors`/`faker`, xz-utils), the SBOM tells you which of your artifacts pulled that component and lets you scope the blast radius.
 - **License and policy automation.** You can answer "do any of our shipped images include a GPL-3.0 library?" without hiring a lawyer to read `go.sum` and lockfiles across every repo.
 - **Regulatory compliance.** US Executive Order 14028 and the EU Cyber Resilience Act both now *require* SBOMs for software sold to certain markets. Generating them today is table stakes for shipping tomorrow.
@@ -390,6 +391,273 @@ The discipline is the same for informational as for HIGH: **read it, decide, wri
 
 ---
 
+
+## Bonus — `govulncheck` as a CI PR Gate
+
+### B.1 Goal
+
+Add `govulncheck` to the Lab 3 CI workflow so that PRs introducing a
+*vulnerability reachable from the QuickNotes call graph* are blocked before merge.
+
+Reachability is the key idea: `govulncheck` doesn't just ask *"is this module
+present?"* — it builds the call graph from `main` outward and reports only
+vulnerabilities whose affected symbols are actually reachable from our code.
+
+### B.2 Job in CI
+
+The gate is implemented as its own job in `.github/workflows/ci.yml` and wired
+into the aggregating `ci-ok` job so that a `govulncheck` failure blocks the PR:
+
+```yaml
+  govulncheck:
+    name: govulncheck
+    runs-on: ubuntu-24.04
+
+    defaults:
+      run:
+        working-directory: app
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.2.2
+
+      - name: Set up Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version: '1.25'
+          cache: true
+          cache-dependency-path: app/go.mod
+
+      - name: Install govulncheck (pinned)
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
+
+      - name: Run govulncheck
+        run: govulncheck ./...
+
+  ci-ok:
+    name: ci-ok
+    if: always()
+    needs:
+      - vet
+      - test
+      - lint
+      - govulncheck
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check required jobs
+        run: |
+          test "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}" = "false"
+```
+
+Design notes:
+
+- **Pinned version** `govulncheck@v1.1.4` (not `@latest`) — reproducibility, so a
+  scanner upgrade doesn't turn the gate red overnight for reasons unrelated to
+  the code. Same reasoning as the Trivy (`0.59.1`) and ZAP (`2.16.0`) pins in
+  Tasks 1 and 2.
+- **Go 1.25** matches the builder in `app/Dockerfile` after the Task 1 fix, so the
+  gate evaluates the same toolchain that produces the shipped binary.
+- **Dedicated status check** — the job's status is one GitHub exposes as a
+  required check, and `ci-ok` (the branch-protection gate) now depends on it, so
+  a red `govulncheck` blocks the PR.
+- The job runs `govulncheck ./...` from `app/` — the module root — so it analyses
+  the QuickNotes call graph, not the repo's other directories.
+
+### B.3 Demonstrating the gate catches a bad dependency
+
+To prove the gate works (and isn't just green because there's nothing to catch),
+the vulnerable dependency was introduced **temporarily** and the CI was observed
+going red.
+
+**Red state.** `golang.org/x/text@v0.3.7` was added to `app/go.mod`, along with a
+small file that actually calls into it so the vulnerable symbol is on the call
+graph (not merely required):
+
+```go
+// app/vuln_demo.go (temporary — removed after the demo)
+package main
+
+import "golang.org/x/text/language"
+
+// demoReach exists only to make the vulnerable symbol in
+// golang.org/x/text reachable from main, so govulncheck reports
+// GO-2022-1059 at symbol level.
+func demoReach() {
+	_, _, _ = language.ParseAcceptLanguage("en-US,en;q=0.9")
+}
+```
+
+and a call from `main()`:
+
+```go
+func main() {
+	demoReach() // TEMP: red-CI demo
+	...
+}
+```
+
+`govulncheck` correctly reports it at symbol level:
+
+```
+=== Symbol Results ===
+
+Vulnerability #1: GO-2022-1059
+    Denial of service via crafted Accept-Language header in
+    golang.org/x/text/language
+  More info: https://pkg.go.dev/vuln/GO-2022-1059
+  Module: golang.org/x/text
+    Found in: golang.org/x/text@v0.3.7
+    Fixed in: golang.org/x/text@v0.3.8
+    Example traces found:
+      #1: vuln_demo.go:10:40: quicknotes.demoReach calls language.ParseAcceptLanguage
+
+Your code is affected by 1 vulnerability from 1 module.
+```
+
+The CI run on the corresponding push fails on the `govulncheck` job (and on
+`ci-ok`, which depends on it):
+
+![Red CI — govulncheck fails on GO-2022-1059](screenshots/3.png)
+
+**Green state.** The demo file and the `demoReach()` call were removed, and
+`golang.org/x/text` was dropped back out of the module (it wasn't used by any
+production code). Locally:
+
+```
+$ govulncheck ./...
+=== Symbol Results ===
+
+No vulnerabilities found.
+
+Your code is affected by 0 vulnerabilities.
+```
+
+After pushing the revert, the same PR's CI run goes green on `govulncheck` and
+`ci-ok`:
+
+![Green CI — govulncheck passes](screenshots/4.png)
+
+This is the entire point of the gate: a PR that pulls in a reachable vulnerable
+symbol cannot merge; a clean tree can.
+
+### B.4 Design questions (h–j)
+
+**h) Reachability — how is *"this module has a CVE but we don't call the affected
+function"* different from *"this module has a CVE"*, and what does that mean for
+triage workload?**
+
+The difference is the difference between **presence** and **exposure**.
+
+- **"This module has a CVE"** is what every image scanner (Trivy, Grype, Snyk
+  container) reports. It's a lexical match against a database of package
+  versions. The question it answers is *"could a vulnerable byte be in the
+  artifact?"* That's a *necessary* condition for exploitation, but it's not
+  sufficient. A module that's present but whose vulnerable function is never
+  called from any code path is dead code, and dead code is not exploitable.
+- **"We don't call the affected function"** is a *reachability* claim. It says the
+  vulnerable symbol is not on any call graph rooted at `main` — no direct call,
+  no indirect call, no reflection path that the analyser can see. The byte is
+  still in the binary; but there's no *path from any input* to it. This is what
+  `govulncheck` computes.
+
+The practical consequence for triage is enormous.
+
+An image scan of a real Go service typically produces tens to low hundreds of
+findings, of which the majority are module-level matches. `govulncheck` on the
+same code typically produces **0–10**. The 60–90% delta is exactly the set of
+findings that *look* scary (HIGH/CRITICAL CVSS) but cannot be triggered from our
+code. Collapsing those away is the difference between a triage queue that's read
+and a triage queue that's rubber-stamped.
+
+Two caveats worth stating explicitly, because the lab cares about honesty over
+tool-worship:
+
+1. **Reachability is analysis, not proof.** `govulncheck` sees static calls and
+   some interface dispatch; it does not see runtime reflection, plugin loading,
+   or code paths reachable only via CGO from the OS. A finding marked "not
+   reachable" is usually not reachable, but the tool's analysis is not a proof.
+2. **`govulncheck` and Trivy are complementary, not overlapping.** The image scan
+   catches OS packages, non-Go dependencies, and CVEs without call-graph
+   metadata (which `govulncheck` can't symbol-match). The right pipeline runs
+   both and treats their outputs as separate triage streams.
+
+The effect on triage workload: `govulncheck` shrinks the *urgent* queue by
+removing from it everything that's present-but-not-reachable, and leaves Trivy
+to cover the broad-but-coarse layer. The two together are more informative than
+either alone.
+
+**i) Why pin the version of the scanner, not just `@latest`?**
+
+Four reasons, all of which matter for a gate:
+
+1. **Reproducibility.** `go install ...@latest` means CI on Tuesday and CI on
+   Thursday can run *different scanners* against identical code and get
+   different answers. A gate whose verdict depends on the day you pushed is not
+   a gate. Pinning to `v1.1.4` makes the "what will this PR run?" question have
+   a single, stable answer.
+2. **Supply-chain risk.** `@latest` fetches whatever the maintainer pushed most
+   recently. If the upstream repo is compromised, you pull the malicious version
+   automatically and silently. A pinned version gives you a fixed target, a
+   diffable change when you upgrade, and a rollback anchor. This is the same
+   argument that applies to every other pin in this lab — Trivy `0.59.1`, ZAP
+   `2.16.0`, `golangci-lint v2.5.0`, and the commit-pinned `actions/checkout`
+   and `actions/setup-go` in the Lab 3 workflow.
+3. **Behaviour stability.** Scanners change rules, confidence levels, and symbol
+   metadata between versions. A pinned scanner means a finding only appears when
+   *your code* changes — not when the scanner decides to be stricter. When you
+   *do* want the new rules, you bump the pin deliberately, in a PR, with a
+   changelog, and you can see exactly what changed in the review.
+4. **Debuggability.** When CI goes red, you want to reproduce it locally.
+   `go install ...@v1.1.4` on your machine gives exactly the same scanner as CI.
+   `@latest` today may differ from `@latest` on the CI that ran three days ago,
+   and then you're debugging the scanner instead of the finding.
+
+A pinned scanner is what turns "we run a security tool" into "we run a security
+check that means something".
+
+**j) What will `govulncheck` *not* catch, that Trivy (image scan) will?**
+
+`govulncheck` analyses the Go module graph and the Go call graph. It is
+completely blind to anything outside Go. Trivy's image scan covers the rest of
+the artifact. Concretely:
+
+- **OS packages.** A CVE in `openssl`, `glibc`, `libssl`, `zlib`, `bash`, or any
+  Debian/Alpine package present in the image is invisible to `govulncheck`.
+  Trivy reads `/var/lib/dpkg/status` (or `apk` metadata) and reports these. In
+  QuickNotes' case the distroless base reduces this set to a handful of
+  packages — but a hypothetical move to an `ubuntu:latest` base would reintroduce
+  dozens of OS-package findings overnight, none of which `govulncheck` would see.
+- **Non-Go dependencies.** Node.js packages in a sidecar, Python packages in a
+  build tool, Java JARs in a shared layer — anything not tracked by `go.mod`.
+  `govulncheck` only walks Go modules.
+- **Static binaries and native libraries in the image.** A `curl` binary copied
+  in during the build, a vendored `.so`, an `openssl` CLI — `govulncheck` has no
+  idea they exist. Trivy fingerprints binaries and, for supported formats,
+  matches them against its vulnerability database.
+- **Build-time toolchain residue.** CVEs in packages installed during
+  `docker build` (older `apt`, older `gcc`, older `go install` targets) that left
+  their artifacts in the final image. `govulncheck` sees the *resulting Go
+  binary*; Trivy sees the whole filesystem layer.
+- **Secrets and misconfiguration.** Trivy's `secret` and `config` scanners
+  catch hardcoded credentials in layers, and misconfigurations in
+  Dockerfile/compose/etc. `govulncheck` is a Go vulnerability scanner — it does
+  not do secrets or IaC policy.
+- **Vulnerabilities without call-graph metadata.** Some entries in the Go vuln
+  DB don't have `symbols` metadata (the CVE affects a package but the specific
+  symbol isn't catalogued). `govulncheck` skips these because it can't symbol-
+  match them; Trivy's module-level matching reports them anyway.
+
+The correct mental model for the whole pipeline:
+
+| Layer | Sees | Misses |
+|-------|------|--------|
+| `govulncheck` | Go code reachable from `main`, precise | OS, non-Go, no-symbol CVEs |
+| Trivy image | OS packages, libraries, secrets, config, Go modules | Call-graph reachability |
+
+You run both. The union is your exposure; the intersection is where you triage
+first.
+
+
 ## Summary
 
 | Task | Status |
@@ -403,7 +671,8 @@ The discipline is the same for informational as for HIGH: **read it, decide, wri
 | Task 2.3 — ≥ 1 fix landed (middleware + test) | ✅ (`SecurityHeaders` + `TestSecurityHeadersPresent`) |
 | Task 2.4 — before/after evidence | ✅ (`zap-before.json` → `zap-after.json`) |
 | Task 2.5 — design questions e–g | ✅ |
-| Bonus — govulncheck CI gate | ❌ not attempted in this submission |
+| Bonus — govulncheck CI gate | ✅ (job in CI, caught GO-2022-1059, reverts clean) |
+| Bonus B.3 — design questions h–j | ✅ |
 
 **Artifacts in this repo:**
 
@@ -416,7 +685,8 @@ The discipline is the same for informational as for HIGH: **read it, decide, wri
 - `artifacts/lab9/zap-before.html`, `zap-after.html` — full HTML reports
 - `screenshots/1.png` — `go test ./... -v`, all pass
 - `screenshots/2.png` — `curl.exe -I /health`, all 7 headers present
-- Code: `app/middleware/security_headers.go`, `app/middleware/security_headers_test.go`, `app/main.go`, `app/Dockerfile`
+- `screenshots/3.png` — red CI run, `govulncheck` job failing on `GO-2022-1059`
+- `screenshots/4.png` — green CI run, `govulncheck` job passing after revert
+- Code: `app/middleware/security_headers.go`, `app/middleware/security_headers_test.go`, `app/main.go`, `app/Dockerfile`, `.github/workflows/ci.yml`
 ```
 
----

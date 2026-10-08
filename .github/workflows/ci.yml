@@ -16,6 +16,9 @@ on:
 
 permissions:
   contents: read
+ 
+env:
+  GOTOOLCHAIN: local
 
 jobs:
   vet:
