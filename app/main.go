@@ -9,9 +9,12 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+	
+	"quicknotes/middleware"
 )
 
 func main() {
+	demoReach() // TEMP: red-CI demo for govulncheck
 	if len(os.Args) > 1 && os.Args[1] == "-health" {
 		resp, err := http.Get("http://127.0.0.1:8080/health")
 		if err != nil || resp.StatusCode != http.StatusOK {
@@ -35,7 +38,7 @@ func main() {
 	server := NewServer(store)
 	srv := &http.Server{
 		Addr:              addr,
-		Handler:           server.Routes(),
+		Handler:           middleware.SecurityHeaders(server.Routes()),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
