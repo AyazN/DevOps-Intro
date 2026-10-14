@@ -18,11 +18,18 @@ jobs:
       - name: Build docker image
         run: nix build .#docker
 
-      - name: Compute digest (with deliberate corruption to test the gate)
+      # DELIBERATE TAMPER — proves the compare gate actually fails on mismatch.
+      # Remove this block to restore the green path.
+      - name: Tamper with artifact (RED RUN ONLY)
         id: digest
         run: |
-          echo "corrupted" >> result
-          echo "hash=$(sha256sum result | awk '{print $1}')" >> $GITHUB_OUTPUT
+          cp --dereference result /tmp/image.tar.gz
+          echo "corrupted" >> /tmp/image.tar.gz
+          echo "hash=$(sha256sum /tmp/image.tar.gz | awk '{print $1}')" >> $GITHUB_OUTPUT
+
+      - name: Compute digest
+        id: digest
+        run: echo "hash=$(sha256sum result | awk '{print $1}')" >> $GITHUB_OUTPUT
 
     outputs:
       digest: ${{ steps.digest.outputs.hash }}
