@@ -27,6 +27,7 @@ jobs:
         id: digest-a
         run: |
           cp --dereference result "$RUNNER_TEMP/image.tar.gz"
+          chmod u+w "$RUNNER_TEMP/image.tar.gz"
           echo "corrupted" >> "$RUNNER_TEMP/image.tar.gz"
           echo "hash=$(sha256sum "$RUNNER_TEMP/image.tar.gz" | awk '{print $1}')" >> "$GITHUB_OUTPUT"
 
