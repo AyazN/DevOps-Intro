@@ -8,9 +8,9 @@ jobs:
   build-a:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
 
-      - uses: DeterminateSystems/nix-installer-action@v16
+      - uses: DeterminateSystems/nix-installer-action@e50d5f73bfe71c2dd0aa4218de8f4afa59f8f81d  # v16
         with:
           extra-conf: |
             experimental-features = nix-command flakes
@@ -18,18 +18,9 @@ jobs:
       - name: Build docker image
         run: nix build .#docker
 
-      # ---------------------------------------------------------------
-      # RED-RUN ONLY: this step deliberately corrupts the artifact in
-      # job A so the compare job's equality check fails. Remove the
-      # `echo "corrupted"` line to go green.
-      # ---------------------------------------------------------------
-      - name: Compute digest (with deliberate corruption to test the gate)
+      - name: Compute digest
         id: digest-a
-        run: |
-          cp --dereference result "$RUNNER_TEMP/image.tar.gz"
-          chmod u+w "$RUNNER_TEMP/image.tar.gz"
-          echo "corrupted" >> "$RUNNER_TEMP/image.tar.gz"
-          echo "hash=$(sha256sum "$RUNNER_TEMP/image.tar.gz" | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+        run: echo "hash=$(sha256sum result | awk '{print $1}')" >> $GITHUB_OUTPUT
 
     outputs:
       digest: ${{ steps.digest-a.outputs.hash }}
@@ -37,9 +28,9 @@ jobs:
   build-b:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
 
-      - uses: DeterminateSystems/nix-installer-action@v16
+      - uses: DeterminateSystems/nix-installer-action@e50d5f73bfe71c2dd0aa4218de8f4afa59f8f81d  # v16
         with:
           extra-conf: |
             experimental-features = nix-command flakes

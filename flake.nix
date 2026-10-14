@@ -19,7 +19,7 @@
           version = "0.1.0";
           src = ./app;
           env.CGO_ENABLED = "0";
-          vendorHash = null;   # app/go.mod has no external deps
+          vendorHash = null;              # app/go.mod has no external deps
           ldflags = [ "-s" "-w" ];
         };
 
