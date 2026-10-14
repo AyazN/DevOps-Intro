@@ -26,9 +26,9 @@ jobs:
       - name: Compute digest (with deliberate corruption to test the gate)
         id: digest-a
         run: |
-          cp --dereference result /tmp/image.tar.gz
-          echo "corrupted" >> /tmp/image.tar.gz
-          echo "hash=$(sha256sum /tmp/image.tar.gz | awk '{print $1}')" >> $GITHUB_OUTPUT
+          cp --dereference result "$RUNNER_TEMP/image.tar.gz"
+          echo "corrupted" >> "$RUNNER_TEMP/image.tar.gz"
+          echo "hash=$(sha256sum "$RUNNER_TEMP/image.tar.gz" | awk '{print $1}')" >> "$GITHUB_OUTPUT"
 
     outputs:
       digest: ${{ steps.digest-a.outputs.hash }}
