@@ -17,6 +17,8 @@ jobs:
 
       - name: Build docker image
         run: nix build .#docker
+        env:
+          SOURCE_DATE_EPOCH: "1700000000"  # only in build-a
 
       - name: Compute digest
         id: digest
