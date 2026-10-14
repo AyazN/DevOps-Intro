@@ -18,21 +18,20 @@ jobs:
       - name: Build docker image
         run: nix build .#docker
 
-      # DELIBERATE TAMPER — proves the compare gate actually fails on mismatch.
-      # Remove this block to restore the green path.
-      - name: Tamper with artifact (RED RUN ONLY)
-        id: digest
+      # ---------------------------------------------------------------
+      # RED-RUN ONLY: this step deliberately corrupts the artifact in
+      # job A so the compare job's equality check fails. Remove the
+      # `echo "corrupted"` line to go green.
+      # ---------------------------------------------------------------
+      - name: Compute digest (with deliberate corruption to test the gate)
+        id: digest-a
         run: |
           cp --dereference result /tmp/image.tar.gz
           echo "corrupted" >> /tmp/image.tar.gz
           echo "hash=$(sha256sum /tmp/image.tar.gz | awk '{print $1}')" >> $GITHUB_OUTPUT
 
-      - name: Compute digest
-        id: digest
-        run: echo "hash=$(sha256sum result | awk '{print $1}')" >> $GITHUB_OUTPUT
-
     outputs:
-      digest: ${{ steps.digest.outputs.hash }}
+      digest: ${{ steps.digest-a.outputs.hash }}
 
   build-b:
     runs-on: ubuntu-latest
@@ -48,11 +47,11 @@ jobs:
         run: nix build .#docker
 
       - name: Compute digest
-        id: digest
+        id: digest-b
         run: echo "hash=$(sha256sum result | awk '{print $1}')" >> $GITHUB_OUTPUT
 
     outputs:
-      digest: ${{ steps.digest.outputs.hash }}
+      digest: ${{ steps.digest-b.outputs.hash }}
 
   compare:
     needs: [build-a, build-b]

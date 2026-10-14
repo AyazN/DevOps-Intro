@@ -1,68 +1,63 @@
-name: Nix Reproducibility
+{
+  description = "QuickNotes flake";
 
-on:
-  push:
-  pull_request:
+  inputs = {
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.11";
+  };
 
-jobs:
-  build-a:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
+  outputs = { self, nixpkgs }:
+    let
+      system = "x86_64-linux";
+      pkgs = import nixpkgs { inherit system; };
+    in {
+      packages.${system} = {
+        # ---------------------------------------------------------------
+        # Task 1 — reproducible Go binary
+        # ---------------------------------------------------------------
+        quicknotes = pkgs.buildGoModule {
+          pname = "quicknotes";
+          version = "0.1.0";
+          src = ./app;
+          env.CGO_ENABLED = "0";
+          vendorHash = null;   # app/go.mod has no external deps
+          ldflags = [ "-s" "-w" ];
+        };
 
-      - uses: DeterminateSystems/nix-installer-action@v16
-        with:
-          extra-conf: |
-            experimental-features = nix-command flakes
+        # ---------------------------------------------------------------
+        # Task 2 — deterministic OCI image
+        #
+        # buildLayeredImage (not buildImage) because we need
+        # fakeRootCommands + enableFakechroot to create /data owned by
+        # UID 65534 without requiring the `kvm` system feature.
+        # ---------------------------------------------------------------
+        docker = pkgs.dockerTools.buildLayeredImage {
+          name = "quicknotes";
+          tag = "latest";
 
-      - name: Build docker image
-        run: nix build .#docker
+          contents = [ self.packages.${system}.quicknotes ];
+
+          fakeRootCommands = ''
+            mkdir -p data
+            chown 65534:65534 data
+          '';
+          enableFakechroot = true;
+
+          config = {
+            Entrypoint = [ "/bin/quicknotes" ];
+            ExposedPorts = { "8080/tcp" = {}; };
+            User = "65534:65534";
+            WorkingDir = "/";
+          };
+        };
+
+        default = self.packages.${system}.quicknotes;
+      };
 
       # ---------------------------------------------------------------
-      # RED-RUN ONLY: this step deliberately corrupts the artifact in
-      # job A so the compare job's equality check fails. Remove the
-      # `echo "corrupted"` line (or the whole tamper block) to go green.
+      # DevShell for collaborators: `nix develop`
       # ---------------------------------------------------------------
-      - name: Compute digest (with deliberate corruption to test the gate)
-        id: digest-a
-        run: |
-          cp --dereference result /tmp/image.tar.gz
-          echo "corrupted" >> /tmp/image.tar.gz
-          echo "hash=$(sha256sum /tmp/image.tar.gz | awk '{print $1}')" >> $GITHUB_OUTPUT
-
-    outputs:
-      digest: ${{ steps.digest-a.outputs.hash }}
-
-  build-b:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: DeterminateSystems/nix-installer-action@v16
-        with:
-          extra-conf: |
-            experimental-features = nix-command flakes
-
-      - name: Build docker image
-        run: nix build .#docker
-
-      - name: Compute digest
-        id: digest-b
-        run: echo "hash=$(sha256sum result | awk '{print $1}')" >> $GITHUB_OUTPUT
-
-    outputs:
-      digest: ${{ steps.digest-b.outputs.hash }}
-
-  compare:
-    needs: [build-a, build-b]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Compare digests
-        run: |
-          echo "Build A digest: ${{ needs.build-a.outputs.digest }}"
-          echo "Build B digest: ${{ needs.build-b.outputs.digest }}"
-          if [ "${{ needs.build-a.outputs.digest }}" != "${{ needs.build-b.outputs.digest }}" ]; then
-            echo "::error::Digests do not match — reproducibility failed"
-            exit 1
-          fi
-          echo "Digests match — reproducible build confirmed"
+      devShells.${system}.default = pkgs.mkShell {
+        packages = with pkgs; [ go gopls golangci-lint ];
+      };
+    };
+}
