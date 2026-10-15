@@ -1,6 +1,5 @@
 # Lab 12 — WebAssembly Containers (Bonus)
 
-**Author:** <AyazN>
 **Rig:** Windows 11, Docker Desktop (linux/amd64), Spin 3.x, TinyGo 0.41,
 Go 1.25.5, SDK `github.com/spinframework/spin-go-sdk/v2 v2.2.1`
 
